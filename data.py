@@ -70,7 +70,8 @@ class Analyser(object):
         self.kinds = Table('kind_type', metadata, autoload=True)
         self.roles = Table('role_type', metadata, autoload=True)
         self.infotypes = Table('info_type', metadata, autoload=True)
-        self.persons = Table('name', metadata, autoload=True)
+        self.movieinfo = Table('movie_info', metadata, autoload=True)
+        # self.persons = Table('name', metadata, autoload=True)
         self.castinfo = Table('cast_info', metadata, autoload=True)
         # titles -> title_id
         # castinfo -> movie_id (title), person_id
@@ -83,65 +84,56 @@ class Analyser(object):
         print self.kinds.c
         print self.roles.c
         print self.infotypes.c
-        print self.persons.c
+        print self.movieinfo.c
+        # print self.persons.c
         print self.castinfo.c
-        print
-        print '==== movie types'
-        result = self.kinds.select().execute()
-        for r in result:
-            print r
-        print
-        print '==== roles'
-        result = self.roles.select().execute()
-        for r in result:
-            print r
-        print
-        print '==== info types'
-        result = self.infotypes.select().execute()
-        for r in result:
-            print r
+        def showenum(table):
+            print
+            print '==== ', table.name
+            result = table.select().execute()
+            for r in result:
+                print r
+        showenum(self.kinds)
+        showenum(self.roles)
+        showenum(self.infotypes)
 
-    def get_year_production(self, year):
-        query = self.titles.count()
-        query = query.where(self.titles.c.kind_id == 1)
-        query = query.where(self.titles.c.production_year == year)
-        # results = select([func.count(self.titles.c.id)], and_(self.titles.c.kind_id == 1,
-        #    self.titles.c.production_year==1950)).execute()
-        # print results.fetchall()[0][0]
-        count = query.execute().fetchall()[0][0]
-        return count
+    def list_countries(self):
+        mi = self.movieinfo
+        # q = self.movieinfo.select([mi.c.info])
+        q = select([mi.c.info])
+        q = q.where(mi.c.info_type_id == 8)
+        q = q.distinct()
+        print q
+        # results are dumped in countries.js
+        return q.execute()
+
+    def production(self):
+        q = select([self.titles.c.production_year,
+            func.count(self.titles.c.id)])
+        q = q.where(self.titles.c.kind_id == 1)
+        q = q.where(self.titles.c.production_year != None)
+        q = q.group_by(self.titles.c.production_year)
+        q = q.order_by(self.titles.c.production_year)
+        # q = q.where(self.titles.c.production_year == year)
+        return q
+
+    def production_by_country(self, country):
+        q = self.production()
+        q = q.select_from(self.titles.join(
+            self.movieinfo, self.movieinfo.c.movie_id==self.titles.c.id)
+            ).apply_labels()
+        # countries are id 8
+        q = q.where(self.movieinfo.c.info_type_id == 8)
+        q = q.where(self.movieinfo.c.info == country)
+        # print q
+        return q
     
-    def production_summary(self):
-        results = []
-        for year in range(1900, 2007):
-            v = [year, self.get_year_production(year)]
-            print v
-            results.append(v)
-        return results
-
-    def production_summary_info(self):
-        fn1 = 'production_summary.js'
-        if not os.path.exists(fn1):
-            data = self.production_summary()
-            analyser.dump(data, fn1)
-        else:
-            data = sj.load(file(fn1))
-        data = zip(*data)
-        pylab.bar(data[0], data[1])
-        pylab.grid()
-        pylab.savefig(fn1 + '.png')
-
     def search_movies(self, title):
         query = self.titles.select()
         query = query.where(self.titles.c.kind_id == 1)
         query = query.where(self.titles.c.title.ilike(_l(title)))
         out = query.execute()
         return out
-
-    def get_cast(self, movie_id):
-        m = self.imdb.get_movie(movie_id)
-        print m['countries']
-        return m['cast']
 
     def get_cast_via_sqlalchemy(self, movie_id): 
         query = self.titles.select()
@@ -153,6 +145,35 @@ class Analyser(object):
                 ).apply_labels()
         print query
         return query.execute()
+
+    def production_summary_info(self):
+        fn1 = 'production_summary.js'
+        if not os.path.exists(fn1):
+            data = self.production().execute().fetchall()
+            data = [ [x[0], x[1]] for x in data ]
+            analyser.dump(data, fn1)
+        else:
+            data = sj.load(file(fn1))
+        data = zip(*data)
+        pylab.bar(data[0], data[1])
+        pylab.grid()
+        pylab.savefig(fn1 + '.png')
+
+    def plot_production(self, country='all', show_total=True):
+        if show_total:
+            # fn1 = 'production_summary.js'
+            # total = sj.load(file(fn1))
+            total = a.production().execute().fetchall()
+            total = zip(*total)
+            pylab.bar(total[0], total[1])
+        if country != 'all':
+            cdata = a.production_by_country(country).execute().fetchall()
+            cdata = zip(*cdata)
+            pylab.bar(cdata[0], cdata[1], color='r')
+        pylab.grid()
+        fn = 'production_%s.png' % country.replace(' ', '_').lower()
+        fn = str(fn)
+        pylab.savefig(fn)
     
     def dump(self, data, fn):
         fo = file(fn, 'w')
@@ -180,10 +201,25 @@ class TestAnalyser(object):
         assert m.production_year == 1989
         assert len(res) == 4, len(res)
 
+    def test_production_by_country(self):
+        out = self.analyser.production_by_country(u'USA')
+        out = out.execute().fetchall()
+        print out
+        assert len(out) >= 120, len(out)
+        out = dict(out)
+        assert out[1900] == 527
+
+    def test_get_movie(self):
+        movie_id = 234009
+        m = self.analyser.imdb.get_movie(movie_id)
+        assert len(m['countries']) == 1
+        assert m['countries'][0] == u'USA'
+
     def test_get_cast(self):
         # Indiana Jones
         movie_id = 234009
-        info = self.analyser.get_cast(movie_id)
+        m = self.analyser.imdb.get_movie(movie_id)
+        info = m['cast']
         assert info[0]['name'] == 'Harrison Ford'
         assert info[0].personID == 277020
 
@@ -200,9 +236,34 @@ def main():
     retrieve()
     load()
     analyser = Analyser()
-    # analyser.table_info()
+    analyser.table_info()
+
+def demo():
+    a = Analyser()
+    movie_id = 234009
+    m = a.imdb.get_movie(movie_id)
+    print m['countries']
+
+    res = a.search_movies('3 hommes et un couffin')
+    for r in res: print r
+
+def plot_all():
+    a = Analyser()
+    a.plot_production(u'India', show_total=False)
+    pylab.clf()
+    return
+    a.plot_production(u'USA')
+    pylab.clf()
+    a.plot_production(u'UK', show_total=False)
+    pylab.clf()
+    a.plot_production(u'France', show_total=False)
+    pylab.clf()
+    a.plot_production(u'Germany', show_total=False)
+    pylab.clf()
+    a.plot_production(u'Hong Kong', show_total=False)
 
 if __name__ == '__main__':
-    # analyser = Analyser()
-    main()
-
+    a = Analyser()
+    # a.table_info()
+    # demo()
+    plot_all()
