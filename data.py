@@ -15,6 +15,7 @@ Loaded data using http://imdbpy.sourceforge.net/docs/README.sqldb.txt
 '''
 import os
 import urllib
+import time
 
 import pylab
 from sqlalchemy import *
@@ -24,8 +25,13 @@ import imdb
 
 urlbase = 'ftp://ftp.fu-berlin.de/pub/misc/movies/database/'
 fns = [ 'movies.list.gz', 'actors.list.gz', 'actresses.list.gz',
-        'release-dates.list.gz', 'running-times.list.gz', 'countries.list.gz']
+        'release-dates.list.gz', 'running-times.list.gz',
+        'countries.list.gz', 
+        'business.list.gz', # movie revenues, costs etc
+        ]
 cache = os.path.abspath('cache')
+# follow http://imdbpy.sourceforge.net/docs/README.sqldb.txt
+dburi = 'postgres://rgrp:pass@localhost/imdb'
 
 def retrieve():
     if not os.path.exists(cache):
@@ -39,8 +45,6 @@ def retrieve():
         else:
             print 'Skipping %s' % url
 
-# follow http://imdbpy.sourceforge.net/docs/README.sqldb.txt
-dburi = 'postgres://rgrp:pass@localhost/imdb'
 def load():
     # create toload so we can do incremental loading
     # cache = 'toload'
@@ -122,11 +126,39 @@ class Analyser(object):
         q = q.select_from(self.titles.join(
             self.movieinfo, self.movieinfo.c.movie_id==self.titles.c.id)
             ).apply_labels()
-        # countries are id 8
+        # runtime is id 8
         q = q.where(self.movieinfo.c.info_type_id == 8)
         q = q.where(self.movieinfo.c.info == country)
         # print q
         return q
+
+    def production_by_running_time(self, year):
+        q = select([
+            self.titles.c.id,
+            self.titles.c.production_year,
+            self.movieinfo.c.info])
+        q = q.select_from(self.titles.join(
+            self.movieinfo, self.movieinfo.c.movie_id==self.titles.c.id)
+            ).apply_labels()
+        q = q.where(self.titles.c.kind_id == 1)
+        q = q.where(self.titles.c.production_year == year)
+        q = q.order_by(self.titles.c.production_year)
+        # runtime is id 1
+        q = q.where(self.movieinfo.c.info_type_id == 1)
+        total = 0.0
+        for row in q.execute():
+            runtime = 0
+            try:
+                runtime = float(row[2])
+            except:
+                try:
+                    #  Singapore:5 
+                    runtime = row[2].split(':')[1]
+                    runtime = float(runtime)
+                except:
+                    print 'Could not process: %s' % row
+            total += row[1]
+        return total
     
     def search_movies(self, title):
         query = self.titles.select()
@@ -146,23 +178,15 @@ class Analyser(object):
         print query
         return query.execute()
 
-    def production_summary_info(self):
-        fn1 = 'production_summary.js'
-        if not os.path.exists(fn1):
-            data = self.production().execute().fetchall()
-            data = [ [x[0], x[1]] for x in data ]
-            analyser.dump(data, fn1)
-        else:
-            data = sj.load(file(fn1))
-        data = zip(*data)
-        pylab.bar(data[0], data[1])
-        pylab.grid()
-        pylab.savefig(fn1 + '.png')
-
     def plot_production(self, country='all', show_total=True):
         if show_total:
             # fn1 = 'production_summary.js'
-            # total = sj.load(file(fn1))
+            # if not os.path.exists(fn1):
+            #     total = self.production().execute().fetchall()
+            #     total = [ [x[0], x[1]] for x in total ]
+            #     self.dump(total, fn1)
+            # else:
+            #     total = sj.load(file(fn1))
             total = a.production().execute().fetchall()
             total = zip(*total)
             pylab.bar(total[0], total[1])
@@ -174,10 +198,55 @@ class Analyser(object):
         fn = 'production_%s.png' % country.replace(' ', '_').lower()
         fn = str(fn)
         pylab.savefig(fn)
+
+    def running_time_summary(self):
+        fn = os.path.abspath('running_times.js')
+        if not os.path.exists(fn):
+            results = []
+            st = time.time()
+            for year in range(1897, 2008):
+                output = self.production_by_running_time(year)
+                results.append([year, output])
+            end = time.time()
+            print end - st
+            self.dump(results, fn)
+        else:
+            results = sj.load(open(fn))
+        return results
     
     def dump(self, data, fn):
         fo = file(fn, 'w')
         sj.dump(data, fo, sort_keys=True, indent=4)
+
+
+class Plotter(object):
+    def __init__(self):
+        self.a = Analyser()
+
+    def plot_all(self):
+        self.a.plot_production(u'USA')
+        pylab.clf()
+        # totals are so much bigger it messes up figure
+        self.a.plot_production(u'India', show_total=False)
+        pylab.clf()
+        self.a.plot_production(u'UK', show_total=False)
+        pylab.clf()
+        self.a.plot_production(u'France', show_total=False)
+        pylab.clf()
+        self.a.plot_production(u'Germany', show_total=False)
+        pylab.clf()
+        self.a.plot_production(u'Hong Kong', show_total=False)
+
+    def plot_running_times(self):
+        running = self.a.running_time_summary()
+        pylab.clf()
+        running = zip(*running)
+        # pylab.plot(running[0], running[1])
+        pylab.bar(running[0], running[1])
+        country = 'all'
+        fn = 'production_by_times_%s.png' % country.replace(' ', '_').lower()
+        pylab.savefig(fn)
+
 
 class TestAnalyser(object):
     blahfn = 'adfafadsfjadsf.js'
@@ -247,23 +316,10 @@ def demo():
     res = a.search_movies('3 hommes et un couffin')
     for r in res: print r
 
-def plot_all():
-    a = Analyser()
-    a.plot_production(u'India', show_total=False)
-    pylab.clf()
-    return
-    a.plot_production(u'USA')
-    pylab.clf()
-    a.plot_production(u'UK', show_total=False)
-    pylab.clf()
-    a.plot_production(u'France', show_total=False)
-    pylab.clf()
-    a.plot_production(u'Germany', show_total=False)
-    pylab.clf()
-    a.plot_production(u'Hong Kong', show_total=False)
-
 if __name__ == '__main__':
+    # main()
     a = Analyser()
-    # a.table_info()
     # demo()
-    plot_all()
+    plotter = Plotter()
+    # plotter.plot_running_times()
+
