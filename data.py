@@ -12,6 +12,10 @@ However to get scripts (which we need) seems you have to install the tarball.
 Docs at: http://imdbpy.sourceforge.net/
 
 Loaded data using http://imdbpy.sourceforge.net/docs/README.sqldb.txt
+
+Join stuff:
+
+    http://archives.postgresql.org/pgsql-sql/2004-05/msg00130.php
 '''
 import os
 import urllib
